@@ -1,9 +1,11 @@
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 import os
 from dotenv import load_dotenv
 from fastapi.security import APIKeyHeader
 import message_processor  # Changed to simple import
+from typing import List, Optional
 
 # Load environment variables
 load_dotenv()
@@ -25,6 +27,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Request models
+class MessageRequest(BaseModel):
+    user_message: str = Field(..., description="The user's message")
+    chat_id: str = Field(..., description="The chat ID")
+    user_id: str = Field(..., description="The user's ID")
+    message_history: List[dict] = Field(default_factory=list, description="Previous messages in the chat")
+    system_prompt: Optional[str] = Field(None, description="Optional system prompt")
+
 # Security setup
 API_KEY_NAME = "X-API-Key"
 API_KEY = os.getenv("API_KEY", "your-secret-api-key")  # You'll set this in Railway
@@ -32,6 +42,8 @@ api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
 # Initialize message processor
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    print("WARNING: OPENAI_API_KEY is not set!")
 message_processor_instance = message_processor.MessageProcessor(api_key=OPENAI_API_KEY)
 
 # Add a root endpoint for health check
@@ -40,10 +52,8 @@ async def root():
     return {"status": "ok", "message": "Server is running"}
 
 async def verify_api_key(api_key: str = Depends(api_key_header)):
-    print("API Key verification:")
-    print(f"Received API key: {api_key[:4]}... (length: {len(api_key)})")
-    print(f"Expected API key: {API_KEY[:4]}... (length: {len(API_KEY)})")
-    print(f"Keys match: {api_key == API_KEY}")
+    print(f"Received API key: {api_key[:4]}...")  # Only log first 4 chars for security
+    print(f"Expected API key: {API_KEY[:4]}...")
     if api_key != API_KEY:
         raise HTTPException(
             status_code=401,
@@ -54,19 +64,19 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
 @app.post("/process-message")
 async def process_message(
     request: Request,
-    request_data: dict,
+    request_data: MessageRequest,
     api_key: str = Depends(verify_api_key)
 ):
     try:
         print("Received request headers:", dict(request.headers))
-        print("Received request data:", request_data)
+        print("Received request data:", request_data.dict())
         
         result = message_processor_instance.process_message(
-            user_message=request_data.get("user_message"),
-            chat_id=request_data.get("chat_id"),
-            user_id=request_data.get("user_id"),
-            message_history=request_data.get("message_history"),
-            system_prompt=request_data.get("system_prompt")
+            user_message=request_data.user_message,
+            chat_id=request_data.chat_id,
+            user_id=request_data.user_id,
+            message_history=request_data.message_history,
+            system_prompt=request_data.system_prompt
         )
         print("Processing result:", result)
         return result
