@@ -40,8 +40,10 @@ async def root():
     return {"status": "ok", "message": "Server is running"}
 
 async def verify_api_key(api_key: str = Depends(api_key_header)):
-    print(f"Received API key: {api_key[:4]}...")  # Only log first 4 chars for security
-    print(f"Expected API key: {API_KEY[:4]}...")
+    print("API Key verification:")
+    print(f"Received API key: {api_key[:4]}... (length: {len(api_key)})")
+    print(f"Expected API key: {API_KEY[:4]}... (length: {len(API_KEY)})")
+    print(f"Keys match: {api_key == API_KEY}")
     if api_key != API_KEY:
         raise HTTPException(
             status_code=401,
@@ -60,7 +62,7 @@ async def process_message(
         print("Received request data:", request_data)
         
         result = message_processor_instance.process_message(
-            user_message=request_data.get("message"),
+            user_message=request_data.get("user_message"),
             chat_id=request_data.get("chat_id"),
             user_id=request_data.get("user_id"),
             message_history=request_data.get("message_history"),
