@@ -52,8 +52,6 @@ async def root():
     return {"status": "ok", "message": "Server is running"}
 
 async def verify_api_key(api_key: str = Depends(api_key_header)):
-    print(f"Received API key: {api_key[:4]}...")  # Only log first 4 chars for security
-    print(f"Expected API key: {API_KEY[:4]}...")
     if api_key != API_KEY:
         raise HTTPException(
             status_code=401,
@@ -68,9 +66,6 @@ async def process_message(
     api_key: str = Depends(verify_api_key)
 ):
     try:
-        print("Received request headers:", dict(request.headers))
-        print("Received request data:", request_data.dict())
-        
         result = message_processor_instance.process_message(
             user_message=request_data.user_message,
             chat_id=request_data.chat_id,
@@ -78,7 +73,6 @@ async def process_message(
             message_history=request_data.message_history,
             system_prompt=request_data.system_prompt
         )
-        print("Processing result:", result)
         return result
     except Exception as e:
         print("Error processing message:", str(e))
@@ -91,11 +85,7 @@ async def generate_title(
     api_key: str = Depends(verify_api_key)
 ):
     try:
-        print("Received request headers:", dict(request.headers))
-        print("Received request data:", request_data)
-        
         title = message_processor_instance.generate_title(request_data.get("message"))
-        print("Generated title:", title)
         return {"title": title}
     except Exception as e:
         print("Error generating title:", str(e))
