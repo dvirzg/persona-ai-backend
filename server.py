@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
@@ -40,6 +40,8 @@ async def root():
     return {"status": "ok", "message": "Server is running"}
 
 async def verify_api_key(api_key: str = Depends(api_key_header)):
+    print(f"Received API key: {api_key[:4]}...")  # Only log first 4 chars for security
+    print(f"Expected API key: {API_KEY[:4]}...")
     if api_key != API_KEY:
         raise HTTPException(
             status_code=401,
@@ -49,10 +51,14 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
 
 @app.post("/process-message")
 async def process_message(
+    request: Request,
     request_data: dict,
     api_key: str = Depends(verify_api_key)
 ):
     try:
+        print("Received request headers:", dict(request.headers))
+        print("Received request data:", request_data)
+        
         result = message_processor_instance.process_message(
             user_message=request_data.get("message"),
             chat_id=request_data.get("chat_id"),
@@ -60,19 +66,27 @@ async def process_message(
             message_history=request_data.get("message_history"),
             system_prompt=request_data.get("system_prompt")
         )
+        print("Processing result:", result)
         return result
     except Exception as e:
+        print("Error processing message:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/generate-title")
 async def generate_title(
+    request: Request,
     request_data: dict,
     api_key: str = Depends(verify_api_key)
 ):
     try:
+        print("Received request headers:", dict(request.headers))
+        print("Received request data:", request_data)
+        
         title = message_processor_instance.generate_title(request_data.get("message"))
+        print("Generated title:", title)
         return {"title": title}
     except Exception as e:
+        print("Error generating title:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
