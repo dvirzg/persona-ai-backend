@@ -3,6 +3,16 @@ import os
 from dataclasses import dataclass, asdict
 from openai import OpenAI
 from datetime import datetime
+import asyncpg
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+from components.pipeline import MessageProcessingPipeline
 
 @dataclass
 class Message:
@@ -28,116 +38,106 @@ class Chat:
     title: str
     created_at: datetime
 
-class MessageProcessor:
-    def __init__(self, api_key: str, model: str = "gpt-4"):
-        """Initialize the message processor with OpenAI credentials"""
-        self.model = model
-        self.client = OpenAI(api_key=api_key)
+# Initialize FastAPI app
+app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Database connection
+async def get_db_pool():
+    if not hasattr(app.state, "db_pool"):
+        db_url = os.getenv("DATABASE_URL")
+        print(f"Connecting to database with URL: {db_url}")
+        app.state.db_pool = await asyncpg.create_pool(
+            db_url,
+            min_size=1,
+            max_size=10
+        )
+    return app.state.db_pool
+
+# Initialize pipeline
+async def get_pipeline(db_pool: asyncpg.Pool = Depends(get_db_pool)):
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OpenAI API key not configured")
+    return MessageProcessingPipeline(db_pool, api_key)
+
+# Request models
+class MessageRequest(BaseModel):
+    user_message: str
+    chat_id: str
+    user_id: str
+    message_history: Optional[list] = None
+    system_prompt: Optional[str] = None
+
+@app.post("/process-message")
+async def process_message(
+    request: MessageRequest,
+    pipeline: MessageProcessingPipeline = Depends(get_pipeline)
+):
+    """Process a message through the AI pipeline."""
+    try:
+        # Format message data
+        message_data = {
+            "content": request.user_message,
+            "chat_id": request.chat_id,
+            "user_id": request.user_id,
+            "message_history": request.message_history or [],
+            "system_prompt": request.system_prompt
+        }
         
-    def process_message(
-        self,
-        user_message: str,
-        chat_id: str,
-        user_id: str,
-        message_history: Optional[List[Dict[str, str]]] = None,
-        system_prompt: Optional[str] = None
-    ) -> Dict[str, Union[str, Dict[str, Any]]]:
-        """Process a user message and return AI response"""
+        # Process through pipeline
+        result = await pipeline.process_message(message_data)
         
-        # Format messages for OpenAI
-        messages = []
+        if result["status"] == "error":
+            raise HTTPException(status_code=500, detail=result["error"])
+            
+        return result
         
-        # Add system prompt if provided
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-            
-        # Add message history if provided
-        if message_history:
-            for msg in message_history:
-                messages.append({
-                    "role": msg["role"],
-                    "content": msg["content"]
-                })
-                
-        # Add current user message
-        messages.append({
-            "role": "user",
-            "content": user_message
-        })
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/generate-title")
+async def generate_title(
+    request: dict,
+    pipeline: MessageProcessingPipeline = Depends(get_pipeline)
+):
+    """Generate a title for a new chat."""
+    try:
+        # Use the generator component directly for title generation
+        message_data = {
+            "content": request["message"],
+            "system_prompt": "Generate a short, descriptive title (2-6 words) for a chat that starts with this message."
+        }
         
-        try:
-            # Call OpenAI API
-            stream = self.client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                stream=True  # Enable streaming
-            )
-            
-            # Process streaming response
-            collected_messages = []
-            for chunk in stream:
-                if chunk.choices[0].delta.content is not None:
-                    collected_messages.append(chunk.choices[0].delta.content)
-                    
-            # Combine message chunks
-            full_response = ''.join(collected_messages)
-            
-            # Create Message objects and convert to dictionaries
-            user_msg = Message(
-                id=generate_uuid(),
-                role="user",
-                content=user_message,
-                chat_id=chat_id,
-                created_at=datetime.now()
-            )
-            
-            assistant_msg = Message(
-                id=generate_uuid(),
-                role="assistant", 
-                content=full_response,
-                chat_id=chat_id,
-                created_at=datetime.now()
-            )
-            
-            return {
-                "status": "success",
-                "user_message": user_msg.to_dict(),
-                "assistant_message": assistant_msg.to_dict()
-            }
-            
-        except Exception as e:
-            print(f"Error in process_message: {str(e)}")  # Add debug logging
-            return {
-                "status": "error",
-                "error": str(e)
-            }
-            
-    def generate_title(self, first_message: str) -> str:
-        """Generate a title for a new chat based on the first message"""
-        try:
-            completion = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """
-                        Generate a short title based on the user's first message.
-                        - Keep it under 80 characters
-                        - Make it a summary of the user's message
-                        - Do not use quotes or colons
-                        """
-                    },
-                    {
-                        "role": "user",
-                        "content": first_message
-                    }
-                ]
-            )
-            return completion.choices[0].message.content.strip()
-        except Exception as e:
-            print(f"Error in generate_title: {str(e)}")  # Add debug logging
-            return "New Chat"  # Fallback title
-            
+        response = await pipeline.generator.process(message_data, {})
+        
+        return {
+            "title": response.strip('"').strip()  # Remove any quotes from the title
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Startup event
+@app.on_event("startup")
+async def startup():
+    # Initialize database pool
+    await get_db_pool()
+
+# Shutdown event
+@app.on_event("shutdown")
+async def shutdown():
+    if hasattr(app.state, "db_pool"):
+        await app.state.db_pool.close()
+
 def generate_uuid() -> str:
     """Generate a UUID for messages"""
     import uuid
