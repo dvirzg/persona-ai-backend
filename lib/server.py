@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 from fastapi.security import APIKeyHeader
-from .message_processor import MessageProcessor
+from lib.message_processor import MessageProcessor
 
 # Load environment variables
 load_dotenv()
