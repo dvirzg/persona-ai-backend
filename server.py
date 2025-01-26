@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
 from fastapi.security import APIKeyHeader
-from lib.message_processor import MessageProcessor
+import message_processor  # Changed to simple import
 
 # Load environment variables
 load_dotenv()
@@ -32,7 +32,7 @@ api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
 # Initialize message processor
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-message_processor = MessageProcessor(api_key=OPENAI_API_KEY)
+message_processor_instance = message_processor.MessageProcessor(api_key=OPENAI_API_KEY)
 
 # Add a root endpoint for health check
 @app.get("/")
@@ -53,7 +53,7 @@ async def process_message(
     api_key: str = Depends(verify_api_key)
 ):
     try:
-        result = message_processor.process_message(
+        result = message_processor_instance.process_message(
             user_message=request_data.get("message"),
             chat_id=request_data.get("chat_id"),
             user_id=request_data.get("user_id"),
@@ -70,7 +70,7 @@ async def generate_title(
     api_key: str = Depends(verify_api_key)
 ):
     try:
-        title = message_processor.generate_title(request_data.get("message"))
+        title = message_processor_instance.generate_title(request_data.get("message"))
         return {"title": title}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
