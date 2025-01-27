@@ -4,13 +4,18 @@ from pydantic import BaseModel, Field
 import os
 from dotenv import load_dotenv
 from fastapi.security import APIKeyHeader
-import message_processor  # Changed to simple import
+from components.pipeline import MessageProcessingPipeline
 from typing import List, Optional
+from routes import pipeline
+import asyncpg
 
 # Load environment variables
 load_dotenv()
 
 app = FastAPI()
+
+# Include pipeline route
+app.include_router(pipeline.router, prefix="/api")
 
 # Configure CORS
 app.add_middleware(
@@ -40,11 +45,22 @@ API_KEY_NAME = "X-API-Key"
 API_KEY = os.getenv("API_KEY", "your-secret-api-key")  # You'll set this in Railway
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=True)
 
-# Initialize message processor
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    print("WARNING: OPENAI_API_KEY is not set!")
-message_processor_instance = message_processor.MessageProcessor(api_key=OPENAI_API_KEY)
+# Database pool
+db_pool = None
+
+@app.on_event("startup")
+async def startup():
+    global db_pool
+    database_url = os.getenv("DATABASE_URL")
+    if not database_url:
+        raise Exception("DATABASE_URL environment variable is not set")
+    db_pool = await asyncpg.create_pool(database_url, ssl="require")
+
+@app.on_event("shutdown")
+async def shutdown():
+    global db_pool
+    if db_pool:
+        await db_pool.close()
 
 # Add a root endpoint for health check
 @app.get("/")
@@ -66,14 +82,29 @@ async def process_message(
     api_key: str = Depends(verify_api_key)
 ):
     try:
-        result = message_processor_instance.process_message(
-            user_message=request_data.user_message,
-            chat_id=request_data.chat_id,
-            user_id=request_data.user_id,
-            message_history=request_data.message_history,
-            system_prompt=request_data.system_prompt
-        )
+        # Initialize pipeline for this request
+        pipeline = MessageProcessingPipeline(db_pool, os.getenv("OPENAI_API_KEY"))
+        
+        # Process message
+        message_data = {
+            "content": request_data.user_message,
+            "chat_id": request_data.chat_id,
+            "user_id": request_data.user_id,
+            "message_history": request_data.message_history,
+            "system_prompt": request_data.system_prompt
+        }
+        
+        # Process through pipeline and get final result
+        result = None
+        async for step in pipeline.process_message(message_data):
+            if step.get("phase") == "complete":
+                result = step.get("response")
+        
+        if not result:
+            raise HTTPException(status_code=500, detail="Pipeline did not produce a response")
+            
         return result
+        
     except Exception as e:
         print("Error processing message:", str(e))
         raise HTTPException(status_code=500, detail=str(e))
@@ -85,8 +116,18 @@ async def generate_title(
     api_key: str = Depends(verify_api_key)
 ):
     try:
-        title = message_processor_instance.generate_title(request_data.get("message"))
-        return {"title": title}
+        # Initialize pipeline for this request
+        pipeline = MessageProcessingPipeline(db_pool, os.getenv("OPENAI_API_KEY"))
+        
+        # Use the generator component directly for title generation
+        message_data = {
+            "content": request_data["message"],
+            "system_prompt": "Generate a short, descriptive title (2-6 words) for a chat that starts with this message."
+        }
+        
+        initial_response = await pipeline.generator.process(message_data, {})
+        return {"title": initial_response.strip('"').strip()}
+        
     except Exception as e:
         print("Error generating title:", str(e))
         raise HTTPException(status_code=500, detail=str(e))

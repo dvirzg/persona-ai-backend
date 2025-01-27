@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, AsyncGenerator
 import asyncpg
 from datetime import datetime
 
@@ -15,17 +15,78 @@ class MessageProcessingPipeline:
         self.generator = ResponseGenerator(api_key)
         self.adjustor = ResponseAdjustor(api_key)
         
-    async def process_message(self, message_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Process a message through the complete pipeline."""
+    async def process_message(self, message_data: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        """Process a message through the complete pipeline, yielding thinking steps."""
         try:
+            # Phase 1: Understanding the Input
+            yield {
+                "phase": "understanding",
+                "thinking": "Understanding the message and extracting key insights...",
+                "status": "in_progress"
+            }
+            
             # 1. Extract insights from the message
             insights = await self.listener.process(message_data)
+            
+            yield {
+                "phase": "understanding",
+                "thinking": "Extracted key insights about people, topics, and context",
+                "status": "complete",
+                "details": {
+                    "insights": insights
+                }
+            }
+
+            # Phase 2: Building Context
+            yield {
+                "phase": "context",
+                "thinking": "Building comprehensive context from past interactions...",
+                "status": "in_progress"
+            }
             
             # 2. Save insights and fetch context
             context = await self.fetcher.process(message_data, insights)
             
+            yield {
+                "phase": "context",
+                "thinking": "Retrieved user profile, interests, and relevant history",
+                "status": "complete",
+                "details": {
+                    "context_elements": [
+                        "User profile",
+                        "Communication preferences",
+                        "Past interactions",
+                        "Shared interests"
+                    ]
+                }
+            }
+
+            # Phase 3: Generating Response
+            yield {
+                "phase": "generation",
+                "thinking": "Crafting initial response based on context...",
+                "status": "in_progress"
+            }
+            
             # 3. Generate initial response
             initial_response = await self.generator.process(message_data, context)
+            
+            yield {
+                "phase": "generation",
+                "thinking": "Generated contextually-aware response",
+                "status": "complete",
+                "details": {
+                    "response_length": len(initial_response),
+                    "includes_context": True
+                }
+            }
+
+            # Phase 4: Style Adjustment
+            yield {
+                "phase": "adjustment",
+                "thinking": "Adjusting response style to match user preferences...",
+                "status": "in_progress"
+            }
             
             # 4. Adjust response style
             adjustment_data = {
@@ -35,26 +96,50 @@ class MessageProcessingPipeline:
                 "message_history": message_data.get("message_history", []),
                 "system_prompt": message_data.get("system_prompt")
             }
-            final_response = await self.adjustor.process(adjustment_data, context)
             
-            # Create response object
+            # Stream adjustment thinking steps
+            adjusted_response = await self.adjustor.process(adjustment_data, context)
+            
+            yield {
+                "phase": "adjustment",
+                "thinking": "Completed style adjustment",
+                "status": "complete",
+                "details": {
+                    "preserved_elements": [
+                        "Core message",
+                        "Context relevance",
+                        "Engagement aspects"
+                    ]
+                }
+            }
+
+            # Create final response object
             response = {
                 "status": "success",
                 "assistant_message": {
-                    "id": message_data.get("message_id", ""),  # Should be provided by caller
+                    "id": message_data.get("message_id", ""),
                     "role": "assistant",
-                    "content": final_response,
+                    "content": adjusted_response,
                     "created_at": datetime.now().isoformat(),
                     "chat_id": message_data.get("chat_id", "")
                 },
-                "insights": insights  # Optionally include extracted insights
+                "insights": insights
             }
             
-            return response
+            yield {
+                "phase": "complete",
+                "thinking": "Response ready for delivery",
+                "status": "complete",
+                "response": response
+            }
             
         except Exception as e:
-            print(f"Error in message processing pipeline: {str(e)}")
-            return {
+            yield {
+                "phase": "error",
+                "thinking": f"Error in message processing: {str(e)}",
                 "status": "error",
-                "error": str(e)
+                "details": {
+                    "error": str(e),
+                    "phase": "message_processing"
+                }
             } 
