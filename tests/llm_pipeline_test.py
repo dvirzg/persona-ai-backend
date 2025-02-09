@@ -129,6 +129,46 @@ class ExperimentalFetcher:
         
         return context
 
+class ExperimentalGenerator:
+    """Experimental version of ResponseGenerator for testing different generation strategies."""
+    def __init__(self, client: AsyncOpenAI):
+        self.client = client
+    
+    async def process(self, message: str, context: Dict[str, Any]) -> str:
+        """Generate a response based on the message and context."""
+        system_prompt = f"""
+        You are an AI assistant helping with technical discussions. 
+        Use the following context to inform your response:
+        
+        User Profile:
+        {json.dumps(context['profile'], indent=2, cls=CustomJSONEncoder)}
+        
+        Relevant Interests:
+        {json.dumps(context['relevant_interests'], indent=2, cls=CustomJSONEncoder)}
+        
+        Relevant People:
+        {json.dumps(context['relevant_people'], indent=2, cls=CustomJSONEncoder)}
+        
+        Relevant Stories:
+        {json.dumps(context['relevant_stories'], indent=2, cls=CustomJSONEncoder)}
+        
+        Generate a response that:
+        1. Addresses the user's question or concern
+        2. Leverages relevant context from their profile and interests
+        3. References relevant past experiences or discussions if applicable
+        4. Maintains appropriate technical depth and formality
+        """
+        
+        response = await self.client.chat.completions.create(
+            model="gpt-4-turbo-preview",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message}
+            ]
+        )
+        
+        return response.choices[0].message.content
+
 class ExperimentalAdjustor:
     """Experimental version of ResponseAdjustor for testing different adjustment strategies."""
     def __init__(self, client: AsyncOpenAI):
@@ -158,19 +198,19 @@ class ExperimentalAdjustor:
         return completion.choices[0].message.content
 
 async def get_test_persona(pool: asyncpg.Pool):
-    """Fetch Emily Zhang's complete profile with interests and social circle."""
+    """Fetch Sophie Martinez's complete profile with interests and social circle."""
     async with pool.acquire() as conn:
         # Get user profile
         user = await conn.fetchrow(
             """
             SELECT id, name, personality_traits, communication_style, demographic
             FROM users
-            WHERE email = 'emily.zhang@example.com'
+            WHERE email = 'sophie.m@example.com'
             """
         )
         
         if not user:
-            raise ValueError("Test user 'emily.zhang@example.com' not found in database")
+            raise ValueError("Test user 'sophie.m@example.com' not found in database")
         
         # Parse JSON strings in user data
         user_dict = dict(user)
@@ -236,6 +276,7 @@ async def process_test_message(message: str, persona_data: Dict[str, Any], clien
         # Initialize components
         listener = ExperimentalListener(client)
         fetcher = ExperimentalFetcher(persona_data)
+        generator = ExperimentalGenerator(client)
         adjustor = ExperimentalAdjustor(client)
         
         print("\n1. Extracting Insights...")
@@ -247,15 +288,7 @@ async def process_test_message(message: str, persona_data: Dict[str, Any], clien
         print(json.dumps(context, indent=2, cls=CustomJSONEncoder))
         
         print("\n3. Generating Initial Response...")
-        initial_response = """
-        For distributed quantum circuit simulation, several consensus algorithms could be suitable depending on your specific requirements. 
-        The main options to consider are:
-        1. Raft - Simple to understand and implement, good for smaller clusters
-        2. Paxos - More complex but very robust, used in many production systems
-        3. PBFT (Practical Byzantine Fault Tolerance) - Handles malicious nodes, good for zero-trust environments
-        
-        Would you like me to explain the trade-offs between these options?
-        """
+        initial_response = await generator.process(message, context)
         print(initial_response)
         
         print("\n4. Adjusting Response...")
@@ -286,9 +319,10 @@ async def main():
         
         # Test message
         test_message = """
-        I've been working on implementing a distributed system for quantum circuit simulation,
-        but I'm running into issues with state synchronization across nodes.
-        Dr. Chen suggested using a consensus algorithm, but I'm not sure which one would be most suitable.
+        I've been feeling overwhelmed lately and keep venting to Lisa about everything.
+        She's always there for me, but I noticed she seems a bit distant recently.
+        I'm worried I might be burdening her too much with my problems.
+        How can I maintain our friendship while being more mindful of her boundaries?
         """
         
         # Process test message
